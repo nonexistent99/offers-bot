@@ -11,6 +11,8 @@ const {
   getLastConnectedAt,
   listGroups,
   onReady,
+  getSessionInfo,
+  clearSession,
 } = require('./services/whatsappService');
 const { runWhatsAppWorker } = require('./jobs/whatsappJob');
 const { exec } = require('child_process');
@@ -89,6 +91,17 @@ app.get('/api/whatsapp/groups', async (req, res) => {
   }
   const list = await listGroups();
   res.json({ groups: list || [] });
+});
+
+// Informações sobre a sessão salva (debug + UI)
+app.get('/api/whatsapp/session-info', (req, res) => {
+  res.json(getSessionInfo());
+});
+
+// Limpa sessão manualmente (regera QR Code). Use só se quiser trocar de número.
+app.post('/api/whatsapp/logout', async (req, res) => {
+  const ok = await clearSession();
+  res.json({ success: ok, message: ok ? 'Sessão limpa. Novo QR Code sendo gerado.' : 'Erro ao limpar sessão.' });
 });
 
 // Endpoints de controle manual a partir do dashboard

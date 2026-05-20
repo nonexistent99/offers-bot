@@ -9,12 +9,17 @@ services:
       # Bind-mounts: edições no Windows refletem no container sem rebuild
       - ./src:/app/src
       - ./public:/app/public
-      - ./data:/app/data
-      - ./.wwebjs_auth:/app/.wwebjs_auth
+      # Volumes NOMEADOS para sobreviver a rebuilds (CRÍTICO):
+      - wwebjs_auth:/app/.wwebjs_auth
+      - offers_data:/app/data
     environment:
       - NODE_ENV=production
       - PORT=3000
       - TZ=America/Sao_Paulo
-    # Mantém o stdout limpo para acompanhar logs
+      - WA_AUTH_FOLDER=/app/.wwebjs_auth
     tty: true
     stdin_open: true
+
+volumes:
+  wwebjs_auth:    # Credenciais WhatsApp — JAMAIS apagar manualmente
+  offers_data:    # Banco SQLite — JAMAIS apagar manualmente

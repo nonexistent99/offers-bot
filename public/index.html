@@ -10,7 +10,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="css/style.css?v=4">
+  <link rel="stylesheet" href="css/style.css?v=5">
 </head>
 <body>
   <div class="app-container">
@@ -138,8 +138,17 @@
             </ol>
 
             <div class="mt-4">
+              <h4 style="margin-bottom:.5rem">📦 Sessão salva no servidor</h4>
+              <div id="sessionInfoBox" style="border:1px solid var(--border);border-radius:8px;padding:.75rem;background:rgba(0,0,0,.15);font-size:.8rem;font-family:monospace;color:var(--text-muted);line-height:1.6">
+                Carregando...
+              </div>
+              <button id="btnLogoutWA" class="btn-danger w-full mt-3" style="padding:.6rem">🔓 Limpar Sessão e Gerar Novo QR</button>
+              <p style="font-size:.75rem;color:var(--text-muted);margin-top:.5rem">⚠️ Use apenas se quiser trocar de número. A sessão salva sobrevive a restarts do bot.</p>
+            </div>
+
+            <div class="mt-4">
               <h4 style="margin-bottom:.5rem">Grupos do WhatsApp do número conectado</h4>
-              <div id="liveGroupsList" style="max-height:300px;overflow:auto;border:1px solid var(--border);border-radius:8px;padding:.5rem;background:rgba(0,0,0,.15);font-size:.85rem;font-family:monospace;color:var(--text)">
+              <div id="liveGroupsList" style="max-height:240px;overflow:auto;border:1px solid var(--border);border-radius:8px;padding:.5rem;background:rgba(0,0,0,.15);font-size:.85rem;font-family:monospace;color:var(--text)">
                 <p style="color:var(--text-muted);text-align:center;padding:1rem">Conecte para listar.</p>
               </div>
               <button id="btnRefreshGroups" class="btn-ghost mt-3 w-full">Atualizar lista</button>
@@ -286,6 +295,6 @@
 
   <div id="toast" class="toast">Notificação aqui</div>
 
-  <script src="js/app.js?v=4"></script>
+  <script src="js/app.js?v=5"></script>
 </body>
 </html>

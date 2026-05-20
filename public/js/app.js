@@ -47,7 +47,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
       if (tabId === 'dashboard') refreshAll();
       if (tabId === 'whatsapp') loadWhatsAppQueue();
-      if (tabId === 'whatsapp-conn') { reloadQrFrame(); refreshWhatsAppStatus(); loadLiveGroups(); }
+      if (tabId === 'whatsapp-conn') { reloadQrFrame(); refreshWhatsAppStatus(); loadLiveGroups(); loadSessionInfo(); }
       if (tabId === 'products') loadProductsByCategory();
       if (tabId === 'settings') loadGroups();
     });
@@ -89,6 +89,33 @@ document.addEventListener('DOMContentLoaded', () => {
     const frame = document.getElementById('qrFrame');
     if (!frame) return;
     frame.src = `/api/whatsapp/qr?t=${Date.now()}`;
+  }
+
+  async function loadSessionInfo() {
+    const box = document.getElementById('sessionInfoBox');
+    if (!box) return;
+    try {
+      const info = await jget(`${API_URL}/api/whatsapp/session-info`);
+      const statusEmoji = info.status === 'connected' ? '🟢' : info.status === 'qr_ready' ? '🟡' : '🔴';
+      const credsStatus = info.hasCreds
+        ? `<span style="color:var(--success)">✅ Sim</span>`
+        : `<span style="color:var(--warning)">❌ Não (precisa escanear QR)</span>`;
+      const lastConn = info.lastConnectedAt ? new Date(info.lastConnectedAt).toLocaleString('pt-BR') : '—';
+      const credsDate = info.credsModified ? new Date(info.credsModified).toLocaleString('pt-BR') : '—';
+      const disconnect = info.lastDisconnectReason ? `<div>Última falha: <span style="color:var(--warning)">${escapeHtml(info.lastDisconnectReason)}</span></div>` : '';
+      box.innerHTML = `
+        <div>Status: ${statusEmoji} <strong>${escapeHtml(info.status)}</strong></div>
+        <div>Sessão salva: ${credsStatus}</div>
+        <div>Arquivos auth: <strong>${info.totalFiles}</strong></div>
+        <div>Credenciais modificadas: ${escapeHtml(credsDate)}</div>
+        <div>Último connect: ${escapeHtml(lastConn)}</div>
+        <div>Tentativas reconexão: <strong>${info.reconnectAttempts || 0}</strong></div>
+        ${disconnect}
+        <div style="word-break:break-all;margin-top:.3rem;color:var(--text-muted);font-size:.7rem">📁 ${escapeHtml(info.folder)}</div>
+      `;
+    } catch (e) {
+      box.innerHTML = `<span style="color:var(--danger)">Erro ao carregar info da sessão.</span>`;
+    }
   }
 
   async function loadLiveGroups() {
@@ -480,6 +507,18 @@ document.addEventListener('DOMContentLoaded', () => {
   const reloadQrBtn = document.getElementById('btnReloadQr');
   if (reloadQrBtn) reloadQrBtn.addEventListener('click', reloadQrFrame);
 
+  const logoutWaBtn = document.getElementById('btnLogoutWA');
+  if (logoutWaBtn) logoutWaBtn.addEventListener('click', async () => {
+    if (!confirm('Limpar sessão atual e gerar novo QR Code?\n\nIsso só é necessário se você quiser trocar de número WhatsApp. Se for só problema de conexão, NÃO faça isso — o bot reconecta sozinho.')) return;
+    try {
+      const res = await fetch(`${API_URL}/api/whatsapp/logout`, { method: 'POST' });
+      if (res.ok) {
+        showToast('Sessão limpa! Aguarde o novo QR aparecer...');
+        setTimeout(() => { reloadQrFrame(); loadSessionInfo(); }, 3000);
+      } else showToast('Erro ao limpar sessão.', 'error');
+    } catch (err) { showToast('Erro de conexão.', 'error'); }
+  });
+
   const refreshProductsBtn = document.getElementById('btnRefreshProducts');
   if (refreshProductsBtn) refreshProductsBtn.addEventListener('click', loadProductsByCategory);
 
@@ -497,11 +536,12 @@ document.addEventListener('DOMContentLoaded', () => {
   // Status WhatsApp a cada 4s
   setInterval(refreshWhatsAppStatus, 4000);
 
-  // Auto-reload do iframe QR a cada 10s (caso esteja na aba de conexão)
+  // Auto-reload do iframe QR + info de sessão a cada 10s (na aba de conexão)
   setInterval(() => {
     const tab = document.getElementById('whatsapp-conn');
     if (tab && tab.classList.contains('active')) {
       reloadQrFrame();
+      loadSessionInfo();
     }
   }, 10000);
 
