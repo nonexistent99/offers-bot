@@ -1,22 +1,69 @@
 require('dotenv').config();
 const app = require('./server');
 const cron = require('node-cron');
-const { runJobs, dispatchNextRound } = require('./jobs/offerJob');
+const { runJobs, dispatchNextRound, queues } = require('./jobs/offerJob');
 const { runAggregator } = require('./services/offerAggregator');
-const { startWhatsApp, getStatus, getQrCode, listGroups } = require('./services/whatsappService');
+const {
+  startWhatsApp,
+  getStatus,
+  getQrCode,
+  getQrCodeRaw,
+  getLastConnectedAt,
+  listGroups,
+  onReady,
+} = require('./services/whatsappService');
 const { runWhatsAppWorker } = require('./jobs/whatsappJob');
 const { exec } = require('child_process');
 
 const PORT = process.env.PORT || 3000;
 
+// ─── Trava de execução concorrente ────────────────────────────────────────────
+let aggregatorRunning = false;
+let dispatcherRunning = false;
+let workerRunning = false;
+
+async function safeRunAggregator() {
+  if (aggregatorRunning) {
+    console.log('[Aggregator] ⏸️  Já em execução. Pulando este tick.');
+    return;
+  }
+  aggregatorRunning = true;
+  try { await runAggregator(); } catch (e) { console.error('[Aggregator] ❌', e.message); }
+  finally { aggregatorRunning = false; }
+}
+
+async function safeRunDispatcher() {
+  if (dispatcherRunning) return;
+  dispatcherRunning = true;
+  try { await dispatchNextRound(); } catch (e) { console.error('[Dispatcher] ❌', e.message); }
+  finally { dispatcherRunning = false; }
+}
+
+async function safeRunWorker() {
+  if (workerRunning) return;
+  workerRunning = true;
+  try { await runWhatsAppWorker(); } catch (e) { console.error('[WhatsApp Worker] ❌', e.message); }
+  finally { workerRunning = false; }
+}
+
 // ─── Rotas da API do WhatsApp ─────────────────────────────────────────────────
 
-// Status da conexão do WhatsApp
 app.get('/api/whatsapp/status', (req, res) => {
-  res.json({ status: getStatus() });
+  res.json({
+    status: getStatus(),
+    connectedAt: getLastConnectedAt(),
+    hasQr: !!getQrCode(),
+  });
 });
 
-// QR Code em formato de imagem para escanear pelo navegador
+app.get('/api/whatsapp/qr.json', (req, res) => {
+  res.json({
+    status: getStatus(),
+    qr: getQrCode() || null,
+    raw: getQrCodeRaw() || null,
+  });
+});
+
 app.get('/api/whatsapp/qr', (req, res) => {
   const qr = getQrCode();
   if (!qr) {
@@ -31,58 +78,118 @@ app.get('/api/whatsapp/qr', (req, res) => {
       <h2>📱 Escaneie com seu WhatsApp</h2>
       <img src="${qr}" style="width:300px;border-radius:12px;border:4px solid #25D366"/>
       <p style="color:#aaa">Abra o WhatsApp > Menu > Aparelhos Conectados > Conectar um aparelho</p>
-      <script>setTimeout(()=>location.reload(), 20000)</script>
+      <script>setTimeout(()=>location.reload(), 8000)</script>
     </body></html>
   `);
 });
 
-// Lista os grupos (após conectado) e retorna JSON
 app.get('/api/whatsapp/groups', async (req, res) => {
   if (getStatus() !== 'connected') {
     return res.status(400).json({ error: 'WhatsApp não conectado ainda.' });
   }
-  await listGroups();
-  res.json({ message: 'Lista de grupos impressa no terminal do servidor.' });
+  const list = await listGroups();
+  res.json({ groups: list || [] });
+});
+
+// Endpoints de controle manual a partir do dashboard
+app.post('/api/dispatch-now', async (req, res) => {
+  // Dispara aggregator (se a RAM estiver baixa) → dispatcher → worker em background
+  res.json({ message: 'Ciclo manual iniciado: aggregator → dispatcher → worker.' });
+  (async () => {
+    await safeRunAggregator();
+    await safeRunDispatcher();
+    await safeRunWorker();
+  })();
+});
+
+app.post('/api/aggregator-now', async (req, res) => {
+  res.json({ message: 'Aggregator iniciado em background.' });
+  safeRunAggregator();
+});
+
+app.post('/api/worker-now', async (req, res) => {
+  res.json({ message: 'Worker WhatsApp iniciado em background.' });
+  safeRunWorker();
+});
+
+app.get('/api/queues-status', (req, res) => {
+  const snapshot = {};
+  for (const cat of Object.keys(queues)) {
+    snapshot[cat] = (queues[cat] || []).length;
+  }
+  res.json({ queues: snapshot, total: Object.values(snapshot).reduce((a, b) => a + b, 0) });
+});
+
+// Retorna todos os produtos atualmente nas gavetas RAM, com detalhes completos
+app.get('/api/queues-detailed', (req, res) => {
+  const detailed = {};
+  for (const cat of Object.keys(queues)) {
+    detailed[cat] = (queues[cat] || []).map(p => ({
+      name: p.name,
+      currentPrice: p.currentPrice,
+      oldPrice: p.oldPrice,
+      discount: p.discount,
+      image: p.image,
+      affiliateLink: p.affiliateLink,
+      category: p.category,
+      keywordSource: p.keywordSource,
+      score: p.score,
+    }));
+  }
+  res.json({ queues: detailed });
 });
 
 // ─── Inicialização do Servidor ─────────────────────────────────────────────────
 
 app.listen(PORT, () => {
   console.log(`Servidor rodando na porta ${PORT}`);
-  
+
   // Abrir o painel no navegador automaticamente (Windows)
-  exec(`start http://localhost:${PORT}`);
-  
+  if (process.platform === 'win32') {
+    try { exec(`start http://localhost:${PORT}`); } catch (e) {}
+  }
+
   // Agendamento opcional para checar arquivos em horários específicos
   cron.schedule('0 9,18 * * *', () => {
     console.log('Executando cronjob diário de leitura de ofertas locais...');
     runJobs();
   });
-  
-  // Agendamento do Disparo a cada 10 minutos (Telegram e fila WhatsApp)
-  cron.schedule('*/10 * * * *', async () => {
-    await dispatchNextRound();
-  });
-  
-  // Agendamento do Agregador (Amazon + Fallbacks): Roda a cada 3 minutos para manter as gavetas cheias
+
+  // Aggregator: a cada 3 min, mantém as gavetas RAM cheias
   cron.schedule('*/3 * * * *', () => {
     console.log('Executando orquestrador de garimpo...');
-    runAggregator();
+    safeRunAggregator();
   });
 
-  // Worker do WhatsApp: processa a fila a cada 10 minutos
-  cron.schedule('*/10 * * * *', async () => {
-    await runWhatsAppWorker();
+  // Dispatcher: a cada 2 min, despacha 1 oferta por nicho (RAM → DB queue + Telegram)
+  cron.schedule('*/2 * * * *', () => {
+    safeRunDispatcher();
   });
-  
+
+  // WhatsApp Worker: a cada 2 min, drena DB queue → WhatsApp (se conectado)
+  cron.schedule('*/2 * * * *', () => {
+    safeRunWorker();
+  });
+
   console.log('Sistema inicializado e aguardando ofertas.');
-  
-  // Executar imediatamente na inicialização para encher as gavetas
+
+  // 1) Sempre dispara o aggregator para começar a encher as gavetas
   console.log('Iniciando a primeira orquestração para encher as gavetas imediatamente...');
-  runAggregator();
+  safeRunAggregator();
 
-  // Iniciar o WhatsApp (gera QR Code no terminal e em http://localhost:3000/api/whatsapp/qr)
-  console.log('[WhatsApp] Iniciando conexão... Acesse http://localhost:3000/api/whatsapp/qr para escanear o QR Code.');
+  // 2) Inicia WhatsApp (gera QR)
+  console.log('[WhatsApp] Iniciando conexão... Acesse http://localhost:' + PORT + '/api/whatsapp/qr para escanear o QR Code.');
   startWhatsApp().catch(err => console.error('[WhatsApp] Erro ao iniciar:', err.message));
-});
 
+  // 3) Quando o WhatsApp conectar, força um ciclo completo de catch-up
+  onReady(async () => {
+    console.log('[Boot] 🚀 WhatsApp conectou. Disparando ciclo de catch-up...');
+    // Garante que existem produtos nas gavetas RAM
+    await safeRunAggregator();
+    // Despacha 1 por nicho RAM→DB (e Telegram)
+    await safeRunDispatcher();
+    // Drena DB → WhatsApp
+    await safeRunWorker();
+    console.log('[Boot] ✅ Catch-up inicial concluído.');
+  });
+});
