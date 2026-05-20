@@ -5,21 +5,15 @@ const { extractAsin } = require('../services/linkCleaner');
 const DELAY_BETWEEN_MESSAGES_MS = 5000;
 const MAX_PER_CYCLE = 10;
 
-// Inicializa migração da coluna retries
+// Migração agora roda dentro do database.js. Só aguarda DB pronto.
 let migrationExecuted = false;
 async function initWhatsappQueueMigration() {
   if (migrationExecuted) return;
   try {
-    // Tenta adicionar a coluna 'retries'
-    try {
-      await db.runQuery("ALTER TABLE whatsapp_queue ADD COLUMN retries INTEGER DEFAULT 0");
-      console.log('[SQLite Migrações] Coluna "retries" adicionada à whatsapp_queue com sucesso.');
-    } catch (e) {
-      // Ignora erro se a coluna já existe
-    }
+    await db.ready;
     migrationExecuted = true;
   } catch (err) {
-    console.error('[SQLite Migrações] Falha ao adicionar "retries" à whatsapp_queue:', err.message);
+    console.error('[WhatsApp Worker] Falha ao aguardar DB pronto:', err.message);
   }
 }
 

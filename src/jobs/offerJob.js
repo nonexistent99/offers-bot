@@ -25,62 +25,33 @@ const queues = {
 // Rastreia os últimos tipos de produtos enviados por categoria (para forçar variedade)
 const lastSentTypes = {}; // { 'Cozinha': ['torradeira', 'air fryer', 'cafeteira'], ... }
 
-// Inicialização e Migração SQLite Dinâmica
+// Inicialização e Migração — agora ESPERA o DB estar pronto
 async function initMigrations() {
   try {
-    console.log('[SQLite Migrações] 🛠️  Verificando estrutura da tabela sent_products...');
-    
-    // Tenta adicionar a coluna 'asin'
-    try {
-      await db.runQuery('ALTER TABLE sent_products ADD COLUMN asin TEXT');
-      console.log('[SQLite Migrações] Coluna "asin" adicionada com sucesso.');
-    } catch (e) {
-      // Ignora erro se a coluna já existe
-    }
+    // Aguarda o DB criar as tabelas + adicionar colunas + seed
+    await db.ready;
+    console.log('[SQLite Migrações] 🛠️  DB pronto. Rodando backfill e limpeza...');
 
-    // Tenta adicionar a coluna 'title_hash'
-    try {
-      await db.runQuery('ALTER TABLE sent_products ADD COLUMN title_hash TEXT');
-      console.log('[SQLite Migrações] Coluna "title_hash" adicionada com sucesso.');
-    } catch (e) {
-      // Ignora erro se a coluna já existe
-    }
-
-    // 1. Executa o backfill de dados antigos antes de criar os índices únicos
+    // 1. Backfill de asin/title_hash para registros antigos
     await backfillSentProducts();
 
-    // 2. Limpa registros duplicados do histórico usando as colunas recém-preenchidas para evitar conflito de índice único
+    // 2. Limpa registros duplicados do histórico (mesma chave dedup)
     try {
       await db.runQuery(`
-        DELETE FROM sent_products 
+        DELETE FROM sent_products
         WHERE id NOT IN (
-          SELECT MIN(id) 
-          FROM sent_products 
+          SELECT MIN(id)
+          FROM sent_products
           GROUP BY COALESCE(asin, title_hash, name), niche
         )
       `);
-      console.log('[SQLite Migrações] Registros históricos redundantes higienizados com sucesso.');
     } catch (e) {
-      console.error('[SQLite Migrações] Erro ao limpar histórico redundante:', e.message);
+      console.error('[SQLite Migrações] Aviso ao limpar histórico:', e.message);
     }
 
-    // 3. Dropa índices globais antigos conflitantes
-    try {
-      await db.runQuery('DROP INDEX IF EXISTS idx_sent_products_asin');
-      await db.runQuery('DROP INDEX IF EXISTS idx_sent_products_title_hash');
-      console.log('[SQLite Migrações] Índices globais antigos removidos.');
-    } catch (e) {}
-
-    // 4. Cria novos índices compostos focados em (asin + nicho) e (title_hash + nicho) que agora têm sucesso absoluto garantido
-    try {
-      await db.runQuery('CREATE UNIQUE INDEX IF NOT EXISTS idx_sent_products_asin_niche ON sent_products(asin, niche)');
-      await db.runQuery('CREATE UNIQUE INDEX IF NOT EXISTS idx_sent_products_title_hash_niche ON sent_products(title_hash, niche)');
-      console.log('[SQLite Migrações] Novos índices compostos criados com sucesso.');
-    } catch (e) {
-      console.error('[SQLite Migrações] Erro ao criar índices compostos:', e.message);
-    }
+    console.log('[SQLite Migrações] ✅ Migrações de dados concluídas.');
   } catch (err) {
-    console.error('[SQLite Migrações] Erro crítico nas migrações:', err.message);
+    console.error('[SQLite Migrações] Erro crítico:', err.message);
   }
 }
 

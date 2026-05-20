@@ -1,6 +1,7 @@
 require('dotenv').config();
 const app = require('./server');
 const cron = require('node-cron');
+const db = require('./database/database');
 const { runJobs, dispatchNextRound, queues } = require('./jobs/offerJob');
 const { runAggregator } = require('./services/offerAggregator');
 const {
@@ -186,13 +187,22 @@ app.listen(PORT, () => {
 
   console.log('Sistema inicializado e aguardando ofertas.');
 
-  // 1) Sempre dispara o aggregator para começar a encher as gavetas
-  console.log('Iniciando a primeira orquestração para encher as gavetas imediatamente...');
-  safeRunAggregator();
+  // Boot orquestrado: SEMPRE espera o DB ficar pronto antes de scraping/dispatch
+  db.ready
+    .then(async () => {
+      console.log('[Boot] ✅ Banco de dados pronto.');
 
-  // 2) Inicia WhatsApp (gera QR)
-  console.log('[WhatsApp] Iniciando conexão... Acesse http://localhost:' + PORT + '/api/whatsapp/qr para escanear o QR Code.');
-  startWhatsApp().catch(err => console.error('[WhatsApp] Erro ao iniciar:', err.message));
+      // 1) Garimpa Amazon imediatamente
+      console.log('Iniciando a primeira orquestração para encher as gavetas imediatamente...');
+      safeRunAggregator();
+
+      // 2) Inicia WhatsApp (gera QR ou usa sessão salva)
+      console.log('[WhatsApp] Iniciando conexão... Acesse http://localhost:' + PORT + '/api/whatsapp/qr para escanear o QR Code.');
+      startWhatsApp().catch(err => console.error('[WhatsApp] Erro ao iniciar:', err.message));
+    })
+    .catch(err => {
+      console.error('[Boot] ❌ Falha crítica ao iniciar banco de dados:', err.message);
+    });
 
   // 3) Quando o WhatsApp conectar, força um ciclo completo de catch-up
   onReady(async () => {
