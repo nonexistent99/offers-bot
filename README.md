@@ -1,96 +1,148 @@
-# Offers Bot
+# Offers Workspace
 
-Sistema em Node.js para automação de envio de ofertas de produtos para Telegram e WhatsApp.
+Offers Workspace evolui o `offers-bot` para um workspace de operacao organica de grupos de desconto. O app preserva o fluxo existente de ofertas, Telegram, WhatsApp e painel web, e adiciona modulos para produtos, nichos, criativos, qualidade editorial, contas sociais, fila de publicacao, exportacao manual, tracking e analytics.
 
-## Recursos
-- Classificação automática de produtos por nicho baseada em palavras-chave.
-- Geração de textos persuasivos curtos, incluindo preços e links de afiliados.
-- Fila de processamento com delay ajustável para evitar spam.
-- Integração com Telegram (via Bot API) enviando imagem e texto formatado.
-- Fila de WhatsApp manual (salva mensagens para copiar/colar), pronta para integração futura.
-- API REST completa.
-- Banco de dados SQLite local.
-- Suporte para importação via API, `products.json` e `products.csv`.
+O sistema nao implementa bypass, evasao de ban, simulacao humana, automacao de login, manipulacao de sessao ou scraping agressivo de plataformas sociais. Publicacao social deve usar APIs oficiais, OAuth e aprovacao/autorizacao. Quando a API nao esta configurada, o fluxo cai para exportacao manual.
 
-## Instalação
+## Instalar
 
-1. Clone ou baixe o repositório.
-2. Instale as dependências:
-   ```bash
-   npm install
-   ```
-3. Configure as variáveis de ambiente:
-   - Copie o arquivo `.env.example` para `.env`
-   - Preencha `TELEGRAM_BOT_TOKEN` com o token do seu bot (obtido no @BotFather).
-   - Configure os delays e a porta.
-
-## Como Executar
-
-Para rodar em ambiente de desenvolvimento/teste:
 ```bash
+npm install
+cp .env.example .env
 npm start
 ```
 
-### Rodar 24/7 (Produção com PM2)
+Por padrao o servidor sobe em `http://localhost:3000`.
 
-Caso utilize uma VPS, você pode manter o bot rodando 24/7 com PM2:
-```bash
-# Instalar PM2 globalmente (caso não tenha)
-npm install -g pm2
+## Configurar `.env`
 
-# Iniciar o bot
-pm2 start src/index.js --name offers-bot
+Principais variaveis:
 
-# Salvar configuração para reiniciar junto com o sistema
-pm2 save
-pm2 startup
+```env
+PORT=3000
+DATABASE_PATH=./data/app.db
+BASE_PUBLIC_URL=http://localhost:3000
+ENCRYPTION_KEY=change_me_32_chars_minimum
+
+OPENAI_API_KEY=
+ELEVENLABS_API_KEY=
+TELEGRAM_BOT_TOKEN=
 ```
 
-## Configurando os Grupos de Destino
+O banco SQLite e criado automaticamente em `data/app.db`. Se um banco legado `data/database.sqlite` existir e `DATABASE_PATH` nao for definido, o app preserva esse banco.
 
-Antes de processar as ofertas, você precisa cadastrar os IDs/Nomes dos grupos para onde as ofertas irão.
-Exemplo via cURL:
+Os fluxos legados de WhatsApp e scraper recorrente ficam desativados por padrao. Para usar o comportamento antigo, defina `ENABLE_LEGACY_WHATSAPP=true` e/ou `ENABLE_LEGACY_SCRAPER=true`.
 
-**Cadastrar grupo do Telegram para o nicho Gamer:**
-```bash
-curl -X POST http://localhost:3000/groups \
--H "Content-Type: application/json" \
--d '{"niche": "Gamer", "platform": "telegram", "target_id": "@MeuCanalGamer"}'
+## Estrutura
+
+```text
+data/app.db
+modules/products
+modules/niches
+modules/creatives
+modules/accounts
+modules/publisher
+modules/publishers
+modules/tracking
+modules/analytics
+modules/quality-guard
+modules/content-quality
+modules/prompts
+modules/security
+public/index.html
+public/app.js
+public/styles.css
+exports
+output
+uploads
+campaigns
+presets
 ```
 
-*(O `target_id` pode ser o `@username` de um canal público ou o ID numérico, como `-1001234567890`)*
+## Fluxo de uso
 
-## Enviando Ofertas
+1. Importe um produto em `POST /api/products/import` ou pelo painel Radar.
+2. Gere a campanha em `POST /api/products/:id/generate-campaign`.
+3. Avalie o criativo em `POST /api/content-quality/evaluate`.
+4. Aprove ou ajuste o criativo no Creative Studio.
+5. Renderize com `POST /api/creatives/:id/render`.
+6. Cadastre contas no Account Hub.
+7. Crie fila em `POST /api/publisher/queue`.
+8. O Quality Guard roda antes de agendar, publicar ou exportar.
+9. Publique agora ou exporte manualmente.
+10. Use o tracking link `BASE_PUBLIC_URL/r/:tracking_code`.
+11. Consulte resultados em `/api/analytics/summary` ou no painel Analytics.
 
-Você pode alimentar o bot de 3 formas:
+## Publicacao manual
 
-1. **API (Manualmente)**
-   ```bash
-   curl -X POST http://localhost:3000/offers \
-   -H "Content-Type: application/json" \
-   -d '{"name": "Teclado Mecânico Gamer", "oldPrice": 250, "currentPrice": 189.90, "discount": 24, "image": "http://img.com/a.jpg", "affiliateLink": "http://amzn.to/abc"}'
-   ```
+Contas com `posting_mode` `manual` ou `export_only` geram um pacote em:
 
-2. **Via Arquivo products.json**
-   Adicione os produtos no arquivo `data/products.json` e chame a rota para forçar o processamento:
-   ```bash
-   curl -X POST http://localhost:3000/run-now
-   ```
-
-3. **Via Arquivo products.csv**
-   Adicione produtos no arquivo `data/products.csv` e chame a rota `/run-now` ou espere o cronjob diário (configurado em `src/index.js`).
-
-## WhatsApp
-
-Atualmente, o WhatsApp funciona no modo de exportação manual (sem biblioteca não-oficial).
-Para ver as mensagens prontas para envio, acesse:
-```
-GET http://localhost:3000/whatsapp-queue
+```text
+exports/YYYY-MM-DD/account_handle/creative_id/
 ```
 
-Após enviar manualmente (ou criar seu próprio robô que consuma essa API), marque como enviada:
-```bash
-curl -X POST http://localhost:3000/mark-whatsapp-sent \
--H "Content-Type: application/json" \
--d '{"id": 1}'
+O pacote contem `caption.txt`, `metadata.json`, `checklist.txt` e o video quando houver render.
+
+## Telegram
+
+Configure:
+
+```env
+TELEGRAM_BOT_TOKEN=...
 ```
+
+Crie uma conta social:
+
+```json
+{
+  "platform": "telegram",
+  "handle": "@canal",
+  "niche": "gamer_setup",
+  "posting_mode": "api",
+  "metadata": {
+    "chat_id": "@canal"
+  }
+}
+```
+
+Quando `TELEGRAM_BOT_TOKEN` e `metadata.chat_id` estao configurados, o publisher usa a Telegram Bot API. Sem configuracao completa, use exportacao manual.
+
+## APIs oficiais planejadas
+
+- TikTok: OAuth, refresh token, creator_info, upload/init, direct post e status.
+- Instagram: Meta OAuth, IG User ID, media container, publish container e Reels.
+- YouTube: Google OAuth, refresh token e `videos.insert`.
+- Kwai: exportacao manual ate existir integracao oficial adequada.
+
+## Limitacoes atuais
+
+- A geracao de criativos usa templates locais seguros como fallback.
+- O render usa FFmpeg quando disponivel; sem FFmpeg, cria um placeholder explicito em `output/` para manter o fluxo testavel.
+- TikTok, Instagram e YouTube estao como scaffolds oficiais e caem para exportacao manual no publisher.
+- O Quality Guard e o Content Quality usam regras heuristicas locais.
+
+## Rotas principais
+
+- `POST /api/products/import`
+- `GET /api/products`
+- `POST /api/products/:id/generate-campaign`
+- `GET /api/creatives`
+- `POST /api/content-quality/evaluate`
+- `POST /api/quality/check`
+- `POST /api/accounts`
+- `POST /api/publisher/queue`
+- `POST /api/publisher/queue/:id/publish-now`
+- `POST /api/publisher/export`
+- `GET /r/:tracking_code`
+- `GET /api/analytics/summary`
+
+## Codigo legado preservado
+
+As rotas antigas continuam disponiveis:
+
+- `POST /offers`
+- `POST /quick-offer`
+- `GET /offers`
+- `GET /whatsapp-queue`
+- `POST /mark-whatsapp-sent`
+- `GET /api/whatsapp/status`
