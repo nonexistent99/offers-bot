@@ -4,6 +4,7 @@ const db = require('./database/database');
 const { queueProduct, runJobs } = require('./jobs/offerJob');
 const { getPendingWhatsAppMessages, markWhatsAppMessageAsSent } = require('./services/whatsappQueueService');
 const { scrapeLink } = require('./services/scraperService');
+const registerOffersWorkspace = require('../modules/offers-workspace');
 
 const path = require('path');
 
@@ -260,5 +261,8 @@ app.post('/mark-whatsapp-sent', async (req, res) => {
     res.status(500).json({ error: 'Erro interno.' });
   }
 });
+
+// Offers Workspace modules are additive: products, creatives, accounts, publisher, tracking and analytics.
+registerOffersWorkspace(app);
 
 module.exports = app;

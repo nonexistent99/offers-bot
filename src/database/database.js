@@ -2,43 +2,53 @@ const sqlite3 = require('sqlite3').verbose();
 const path = require('path');
 const fs = require('fs');
 
-let dbPath = process.env.DB_PATH || path.join(__dirname, '../../data/database.sqlite');
+let dbPath = process.env.DATABASE_PATH || process.env.DB_PATH || path.join(__dirname, '../../data/app.db');
+const legacyDbPath = path.join(__dirname, '../../data/database.sqlite');
+
+if (!process.env.DATABASE_PATH && !process.env.DB_PATH && fs.existsSync(legacyDbPath) && !fs.existsSync(dbPath)) {
+  dbPath = legacyDbPath;
+}
+
 if (!path.isAbsolute(dbPath)) {
   dbPath = path.resolve(__dirname, '../../', dbPath);
 }
-const dbDir = path.dirname(dbPath);
 
+const dbDir = path.dirname(dbPath);
 if (!fs.existsSync(dbDir)) {
   fs.mkdirSync(dbDir, { recursive: true });
 }
 
-// Promise externa que só resolve quando o DB está pronto + tabelas criadas + migrações aplicadas
 let resolveReady;
 let rejectReady;
-const ready = new Promise((res, rej) => { resolveReady = res; rejectReady = rej; });
+const ready = new Promise((res, rej) => {
+  resolveReady = res;
+  rejectReady = rej;
+});
 
 const db = new sqlite3.Database(dbPath, (err) => {
   if (err) {
     console.error('Erro ao conectar ao banco de dados:', err.message);
     rejectReady(err);
-  } else {
-    console.log('Conectado ao banco de dados SQLite.');
-    initDb()
-      .then(() => {
-        console.log('[SQLite] ✅ Inicialização completa (tabelas + migrações + seed).');
-        resolveReady();
-      })
-      .catch(err => {
-        console.error('[SQLite] ❌ Falha na inicialização:', err.message);
-        rejectReady(err);
-      });
+    return;
   }
+
+  console.log('Conectado ao banco de dados SQLite:', dbPath);
+  initDb()
+    .then(() => {
+      console.log('[SQLite] Inicializacao completa.');
+      resolveReady();
+    })
+    .catch(error => {
+      console.error('[SQLite] Falha na inicializacao:', error.message);
+      rejectReady(error);
+    });
 });
 
 function runSync(sql, params = []) {
   return new Promise((resolve, reject) => {
     db.run(sql, params, function (err) {
-      if (err) reject(err); else resolve(this);
+      if (err) reject(err);
+      else resolve(this);
     });
   });
 }
@@ -46,13 +56,22 @@ function runSync(sql, params = []) {
 function getSync(sql, params = []) {
   return new Promise((resolve, reject) => {
     db.all(sql, params, (err, rows) => {
-      if (err) reject(err); else resolve(rows);
+      if (err) reject(err);
+      else resolve(rows);
     });
   });
 }
 
 async function initDb() {
-  // 1. CREATE TABLEs — tudo em sequência via await pra garantir ordem
+  await createLegacyTables();
+  await createOffersWorkspaceTables();
+  await runLegacyMigrations();
+  await createIndexes();
+  await seedLegacyGroups();
+  await seedOffersWorkspaceNiches();
+}
+
+async function createLegacyTables() {
   await runSync(`CREATE TABLE IF NOT EXISTS sent_products (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     name TEXT NOT NULL,
@@ -80,76 +99,299 @@ async function initDb() {
     retries INTEGER DEFAULT 0,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP
   )`);
+}
 
-  // 2. MIGRAÇÕES defensivas para DBs antigos que não têm asin/title_hash
+async function createOffersWorkspaceTables() {
+  // Offers Workspace lives beside the legacy bot tables so the old flow keeps working.
+  await runSync(`CREATE TABLE IF NOT EXISTS niches (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    slug TEXT UNIQUE NOT NULL,
+    description TEXT,
+    target_audience TEXT,
+    allowed_product_types TEXT,
+    tone TEXT,
+    default_cta TEXT,
+    created_at TEXT,
+    updated_at TEXT
+  )`);
+
+  await runSync(`CREATE TABLE IF NOT EXISTS products (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    niche TEXT,
+    old_price REAL,
+    current_price REAL,
+    discount_pct REAL,
+    image_url TEXT,
+    affiliate_url TEXT,
+    source TEXT,
+    score REAL,
+    status TEXT DEFAULT 'new',
+    metadata_json TEXT,
+    created_at TEXT,
+    updated_at TEXT
+  )`);
+
+  await runSync(`CREATE TABLE IF NOT EXISTS creative_variants (
+    id TEXT PRIMARY KEY,
+    product_id TEXT NOT NULL,
+    campaign_id TEXT,
+    angle TEXT,
+    hook TEXT,
+    script TEXT,
+    on_screen_text_json TEXT,
+    caption TEXT,
+    hashtags_json TEXT,
+    cta TEXT,
+    video_path TEXT,
+    audio_path TEXT,
+    status TEXT DEFAULT 'draft',
+    quality_status TEXT,
+    quality_score REAL,
+    created_at TEXT,
+    updated_at TEXT
+  )`);
+
+  await runSync(`CREATE TABLE IF NOT EXISTS social_accounts (
+    id TEXT PRIMARY KEY,
+    platform TEXT NOT NULL,
+    handle TEXT NOT NULL,
+    niche TEXT,
+    display_name TEXT,
+    status TEXT DEFAULT 'active',
+    daily_limit INTEGER DEFAULT 2,
+    style_prompt TEXT,
+    default_cta TEXT,
+    posting_mode TEXT DEFAULT 'manual',
+    access_token_encrypted TEXT,
+    refresh_token_encrypted TEXT,
+    token_expires_at TEXT,
+    metadata_json TEXT,
+    created_at TEXT,
+    updated_at TEXT
+  )`);
+
+  await runSync(`CREATE TABLE IF NOT EXISTS publish_queue (
+    id TEXT PRIMARY KEY,
+    creative_id TEXT NOT NULL,
+    product_id TEXT,
+    account_id TEXT NOT NULL,
+    scheduled_at TEXT,
+    caption TEXT,
+    status TEXT DEFAULT 'draft',
+    error_message TEXT,
+    quality_review_id TEXT,
+    created_at TEXT,
+    updated_at TEXT
+  )`);
+
+  await runSync(`CREATE TABLE IF NOT EXISTS published_posts (
+    id TEXT PRIMARY KEY,
+    creative_id TEXT,
+    product_id TEXT,
+    account_id TEXT,
+    platform TEXT,
+    platform_post_id TEXT,
+    public_url TEXT,
+    tracking_code TEXT,
+    status TEXT,
+    published_at TEXT,
+    created_at TEXT
+  )`);
+
+  await runSync(`CREATE TABLE IF NOT EXISTS tracking_events (
+    id TEXT PRIMARY KEY,
+    tracking_code TEXT,
+    event_type TEXT,
+    source TEXT,
+    account_id TEXT,
+    product_id TEXT,
+    creative_id TEXT,
+    metadata_json TEXT,
+    created_at TEXT
+  )`);
+
+  await runSync(`CREATE TABLE IF NOT EXISTS creative_quality_reviews (
+    id TEXT PRIMARY KEY,
+    creative_id TEXT,
+    account_id TEXT,
+    hook_score REAL,
+    utility_score REAL,
+    clarity_score REAL,
+    originality_score REAL,
+    honesty_score REAL,
+    niche_fit_score REAL,
+    cta_score REAL,
+    spam_risk_score REAL,
+    retention_score REAL,
+    final_score REAL,
+    status TEXT,
+    problems_json TEXT,
+    improvements_json TEXT,
+    rewrite TEXT,
+    created_at TEXT
+  )`);
+
+  await runSync(`CREATE TABLE IF NOT EXISTS post_similarity_records (
+    id TEXT PRIMARY KEY,
+    creative_id TEXT,
+    account_id TEXT,
+    script_hash TEXT,
+    caption_hash TEXT,
+    product_id TEXT,
+    created_at TEXT
+  )`);
+}
+
+async function runLegacyMigrations() {
   await safeAddColumn('sent_products', 'asin', 'TEXT');
   await safeAddColumn('sent_products', 'title_hash', 'TEXT');
   await safeAddColumn('whatsapp_queue', 'retries', 'INTEGER DEFAULT 0');
+}
 
-  // 3. ÍNDICES compostos (asin+niche, title_hash+niche) para dedup
-  // Tem que ser depois das migrações pra garantir que as colunas existem
+async function createIndexes() {
   try {
     await runSync('DROP INDEX IF EXISTS idx_sent_products_asin');
     await runSync('DROP INDEX IF EXISTS idx_sent_products_title_hash');
     await runSync('DROP INDEX IF EXISTS idx_sent_products_affiliate_link');
-  } catch (e) {}
 
-  try {
     await runSync('CREATE INDEX IF NOT EXISTS idx_sent_products_asin_niche ON sent_products(asin, niche)');
     await runSync('CREATE INDEX IF NOT EXISTS idx_sent_products_title_hash_niche ON sent_products(title_hash, niche)');
     await runSync('CREATE INDEX IF NOT EXISTS idx_sent_products_sent_at ON sent_products(sent_at)');
     await runSync('CREATE INDEX IF NOT EXISTS idx_wa_queue_status ON whatsapp_queue(status, created_at)');
-  } catch (err) {
-    console.error('[SQLite] Aviso ao criar índices:', err.message);
-  }
 
-  // 4. Seeder de grupos default (só se a tabela groups estiver vazia)
+    await runSync('CREATE INDEX IF NOT EXISTS idx_products_niche_status ON products(niche, status, score)');
+    await runSync('CREATE INDEX IF NOT EXISTS idx_creatives_product ON creative_variants(product_id, status)');
+    await runSync('CREATE INDEX IF NOT EXISTS idx_accounts_niche_platform ON social_accounts(niche, platform, status)');
+    await runSync('CREATE INDEX IF NOT EXISTS idx_publish_queue_status ON publish_queue(status, scheduled_at)');
+    await runSync('CREATE INDEX IF NOT EXISTS idx_published_posts_tracking ON published_posts(tracking_code)');
+    await runSync('CREATE INDEX IF NOT EXISTS idx_tracking_events_code ON tracking_events(tracking_code, created_at)');
+  } catch (err) {
+    console.error('[SQLite] Aviso ao criar indices:', err.message);
+  }
+}
+
+async function seedLegacyGroups() {
   const row = await new Promise((resolve) => {
     db.get('SELECT COUNT(*) as count FROM groups', (err, r) => resolve(r || { count: -1 }));
   });
 
-  if (row.count === 0) {
-    console.log('[SQLite Seeder] 🌱 Semeando canais e grupos padrão no banco de dados...');
-    const defaults = [
-      ['Cozinha', 'telegram', '@garimpodigitalprimehub'],
-      ['Beleza feminina', 'telegram', '@ofertasvaultbrasil247'],
-      ['Eletrônicos', 'telegram', '@primeachadosxbrasil'],
-      ['Gamer', 'telegram', '@descontosecretoshubbr'],
-      ['Pet', 'telegram', '@garimpoeliteoficialbr'],
-      ['Leitura', 'telegram', '@ofertasquanticasprime'],
-      ['Academia_Fitness', 'telegram', '@achadosblackvaultbr'],
-      ['Mobile_Games', 'telegram', '@primeimpulsodealsbr'],
-      ['Gamer', 'whatsapp', '120363408801824800@g.us'],
-      ['Cozinha', 'whatsapp', '120363427235389022@g.us'],
-      ['Eletrônicos', 'whatsapp', '120363407495964635@g.us'],
-      ['Beleza feminina', 'whatsapp', '120363427802091162@g.us'],
-      ['Pet', 'whatsapp', '120363410226131492@g.us'],
-      ['Leitura', 'whatsapp', '120363426209729628@g.us'],
-      ['Academia_Fitness', 'whatsapp', '120363426157432603@g.us'],
-      ['Mobile_Games', 'whatsapp', '120363427376215727@g.us'],
-    ];
-    for (const [niche, platform, target_id] of defaults) {
-      await runSync('INSERT INTO groups (niche, platform, target_id) VALUES (?, ?, ?)', [niche, platform, target_id]);
-    }
-    console.log('[SQLite Seeder] ✅ Canais e grupos padrão semeados.');
+  if (row.count !== 0) return;
+
+  console.log('[SQLite Seeder] Semeando canais e grupos padrao.');
+  const defaults = [
+    ['Cozinha', 'telegram', '@garimpodigitalprimehub'],
+    ['Beleza feminina', 'telegram', '@ofertasvaultbrasil247'],
+    ['Eletronicos', 'telegram', '@primeachadosxbrasil'],
+    ['Gamer', 'telegram', '@descontosecretoshubbr'],
+    ['Pet', 'telegram', '@garimpoeliteoficialbr'],
+    ['Leitura', 'telegram', '@ofertasquanticasprime'],
+    ['Academia_Fitness', 'telegram', '@achadosblackvaultbr'],
+    ['Mobile_Games', 'telegram', '@primeimpulsodealsbr'],
+    ['Gamer', 'whatsapp', '120363408801824800@g.us'],
+    ['Cozinha', 'whatsapp', '120363427235389022@g.us'],
+    ['Eletronicos', 'whatsapp', '120363407495964635@g.us'],
+    ['Beleza feminina', 'whatsapp', '120363427802091162@g.us'],
+    ['Pet', 'whatsapp', '120363410226131492@g.us'],
+    ['Leitura', 'whatsapp', '120363426209729628@g.us'],
+    ['Academia_Fitness', 'whatsapp', '120363426157432603@g.us'],
+    ['Mobile_Games', 'whatsapp', '120363427376215727@g.us'],
+  ];
+
+  for (const [niche, platform, targetId] of defaults) {
+    await runSync('INSERT INTO groups (niche, platform, target_id) VALUES (?, ?, ?)', [niche, platform, targetId]);
   }
 }
 
-// Adiciona coluna apenas se ela ainda não existir (idempotente, sem race)
+async function seedOffersWorkspaceNiches() {
+  const now = new Date().toISOString();
+  const defaults = [
+    {
+      id: 'gamer_setup',
+      name: 'Gamer / Setup',
+      slug: 'gamer_setup',
+      description: 'Produtos para setup gamer, perifericos, cadeira, controle, monitor, RGB e acessorios.',
+      target_audience: 'Jovens e adultos que querem montar setup gamer gastando pouco.',
+      allowed_product_types: 'headset, teclado, mouse, mousepad, cadeira, controle, monitor, suporte, luz RGB, acessorios gamer',
+      tone: 'amigo garimpando oferta, linguagem jovem, direta e honesta',
+      default_cta: 'Se ainda estiver nesse preco, deixei no grupo de setup barato da bio.'
+    },
+    {
+      id: 'casa_utilidades',
+      name: 'Casa / Utilidades',
+      slug: 'casa_utilidades',
+      description: 'Produtos uteis para casa, organizacao, limpeza, cozinha, praticidade e decoracao.',
+      target_audience: 'Pessoas que querem economizar em produtos uteis para o dia a dia.',
+      allowed_product_types: 'organizadores, utensilios, cozinha, limpeza, decoracao, iluminacao, ferramentas domesticas',
+      tone: 'pratico, util, simples e confiavel',
+      default_cta: 'Se ainda estiver no valor, coloquei no grupo de achados para casa da bio.'
+    },
+    {
+      id: 'beleza_autocuidado',
+      name: 'Beleza / Autocuidado',
+      slug: 'beleza_autocuidado',
+      description: 'Produtos de beleza, skincare, cabelo, autocuidado e acessorios.',
+      target_audience: 'Pessoas que gostam de se cuidar gastando menos.',
+      allowed_product_types: 'skincare, cabelo, maquiagem, escovas, secadores, perfumes, acessorios, autocuidado',
+      tone: 'proximo, cuidadoso, honesto e sem promessas exageradas',
+      default_cta: 'Se ainda estiver com desconto, deixei no grupo de beleza da bio.'
+    },
+    {
+      id: 'tech_eletronicos',
+      name: 'Eletronicos / Tech',
+      slug: 'tech_eletronicos',
+      description: 'Eletronicos, gadgets, acessorios, cabos, carregadores, fones, smart devices e perifericos.',
+      target_audience: 'Pessoas que gostam de tecnologia e querem comprar melhor.',
+      allowed_product_types: 'fones, carregadores, cabos, powerbanks, gadgets, smartwatches, acessorios tech, hubs, suportes',
+      tone: 'tecnico simples, direto, comparativo e util',
+      default_cta: 'Se ainda estiver nesse preco, deixei no grupo tech da bio.'
+    },
+    {
+      id: 'mercado_economia',
+      name: 'Mercado / Economia Diaria',
+      slug: 'mercado_economia',
+      description: 'Produtos de mercado, higiene, limpeza, alimentos nao pereciveis e economia domestica.',
+      target_audience: 'Pessoas que querem economizar nas compras recorrentes.',
+      allowed_product_types: 'mercado, limpeza, higiene, alimentos, bebidas nao alcoolicas, itens de casa recorrentes',
+      tone: 'economia pratica, direto ao ponto e familiar',
+      default_cta: 'Se ainda estiver valendo, deixei no grupo de economia diaria da bio.'
+    }
+  ];
+
+  for (const niche of defaults) {
+    await runSync(
+      `INSERT OR IGNORE INTO niches (
+        id, name, slug, description, target_audience, allowed_product_types, tone, default_cta, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        niche.id,
+        niche.name,
+        niche.slug,
+        niche.description,
+        niche.target_audience,
+        niche.allowed_product_types,
+        niche.tone,
+        niche.default_cta,
+        now,
+        now
+      ]
+    );
+  }
+}
+
 async function safeAddColumn(table, column, definition) {
   try {
-    // PRAGMA é seguro de chamar; retorna info de cada coluna
     const rows = await getSync(`PRAGMA table_info(${table})`);
     const exists = rows.some(r => r.name === column);
     if (exists) return false;
 
     await runSync(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
-    console.log(`[SQLite Migração] Coluna "${column}" adicionada em ${table}.`);
+    console.log(`[SQLite Migracao] Coluna "${column}" adicionada em ${table}.`);
     return true;
   } catch (err) {
-    // "duplicate column name" = corrida em runs paralelos. Ignorável.
     if (err.message && /duplicate column/i.test(err.message)) return false;
-    console.error(`[SQLite Migração] Falha ao adicionar ${column} em ${table}:`, err.message);
+    console.error(`[SQLite Migracao] Falha ao adicionar ${column} em ${table}:`, err.message);
     return false;
   }
 }
@@ -176,6 +418,7 @@ module.exports = {
   db,
   runQuery,
   getQuery,
-  ready,         // Promise que resolve quando todas as tabelas estão prontas
+  ready,
   safeAddColumn,
+  dbPath,
 };

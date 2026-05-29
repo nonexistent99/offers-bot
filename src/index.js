@@ -19,6 +19,8 @@ const { runWhatsAppWorker } = require('./jobs/whatsappJob');
 const { exec } = require('child_process');
 
 const PORT = process.env.PORT || 3000;
+const ENABLE_LEGACY_WHATSAPP = process.env.ENABLE_LEGACY_WHATSAPP === 'true';
+const ENABLE_LEGACY_SCRAPER = process.env.ENABLE_LEGACY_SCRAPER === 'true';
 
 // ─── Trava de execução concorrente ────────────────────────────────────────────
 let aggregatorRunning = false;
@@ -26,6 +28,10 @@ let dispatcherRunning = false;
 let workerRunning = false;
 
 async function safeRunAggregator() {
+  if (!ENABLE_LEGACY_SCRAPER) {
+    console.log('[Aggregator] Legado desativado por padrao. Defina ENABLE_LEGACY_SCRAPER=true para usar a coleta antiga.');
+    return;
+  }
   if (aggregatorRunning) {
     console.log('[Aggregator] ⏸️  Já em execução. Pulando este tick.');
     return;
@@ -197,8 +203,13 @@ app.listen(PORT, () => {
       safeRunAggregator();
 
       // 2) Inicia WhatsApp (gera QR ou usa sessão salva)
-      console.log('[WhatsApp] Iniciando conexão... Acesse http://localhost:' + PORT + '/api/whatsapp/qr para escanear o QR Code.');
-      startWhatsApp().catch(err => console.error('[WhatsApp] Erro ao iniciar:', err.message));
+      console.log('[WhatsApp] Fluxo legado controlado por ENABLE_LEGACY_WHATSAPP.');
+      if (ENABLE_LEGACY_WHATSAPP) {
+        console.log('[WhatsApp] Iniciando conexao legado. Acesse http://localhost:' + PORT + '/api/whatsapp/qr para escanear o QR Code.');
+        startWhatsApp().catch(err => console.error('[WhatsApp] Erro ao iniciar:', err.message));
+      } else {
+        console.log('[WhatsApp] Legado desativado por padrao. Defina ENABLE_LEGACY_WHATSAPP=true para usar o fluxo antigo.');
+      }
     })
     .catch(err => {
       console.error('[Boot] ❌ Falha crítica ao iniciar banco de dados:', err.message);
