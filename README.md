@@ -33,6 +33,8 @@ O banco SQLite e criado automaticamente em `data/app.db`. Se um banco legado `da
 
 Os fluxos legados de WhatsApp e scraper recorrente ficam desativados por padrao. Para usar o comportamento antigo, defina `ENABLE_LEGACY_WHATSAPP=true` e/ou `ENABLE_LEGACY_SCRAPER=true`.
 
+O painel tambem permite iniciar o WhatsApp manualmente pela aba `WhatsApp`, sem precisar ativar auto-start no boot. Clique em `Iniciar WhatsApp`, aguarde o QR Code e escaneie pelo app oficial em Aparelhos conectados. A sessao fica salva em `WA_AUTH_FOLDER` (padrao `./.wwebjs_auth`).
+
 ## Estrutura
 
 ```text
@@ -107,6 +109,27 @@ Crie uma conta social:
 
 Quando `TELEGRAM_BOT_TOKEN` e `metadata.chat_id` estao configurados, o publisher usa a Telegram Bot API. Sem configuracao completa, use exportacao manual.
 
+## WhatsApp legado
+
+A aba `WhatsApp` do painel possui:
+
+- iniciar conexao e gerar QR Code;
+- visualizar status e detalhes da sessao salva;
+- listar grupos do numero conectado;
+- limpar sessao para trocar de numero.
+
+A aba `Bot Legado` recupera as funcoes operacionais antigas:
+
+- adicionar oferta por link ou manualmente;
+- disparar ciclo manual;
+- drenar fila WhatsApp;
+- processar arquivos JSON/CSV;
+- ver/copiar mensagens pendentes;
+- marcar mensagem como enviada;
+- cadastrar e remover mapeamentos de grupos/canais.
+
+O envio usa a sessao autorizada pelo QR Code do proprio WhatsApp. Nao ha automacao de login, bypass ou manipulacao de sessao.
+
 ## APIs oficiais planejadas
 
 - TikTok: OAuth, refresh token, creator_info, upload/init, direct post e status.
@@ -146,3 +169,7 @@ As rotas antigas continuam disponiveis:
 - `GET /whatsapp-queue`
 - `POST /mark-whatsapp-sent`
 - `GET /api/whatsapp/status`
+- `POST /api/whatsapp/start`
+- `GET /api/whatsapp/qr`
+- `GET /api/whatsapp/groups`
+- `POST /api/whatsapp/logout`

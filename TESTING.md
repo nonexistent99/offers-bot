@@ -120,3 +120,20 @@ curl -i http://localhost:3000/r/TRACKING_CODE
 ```bash
 curl http://localhost:3000/api/analytics/summary
 ```
+
+## WhatsApp legado no painel
+
+1. Abra `http://localhost:3000`.
+2. Entre na aba `WhatsApp`.
+3. Clique em `Iniciar WhatsApp`.
+4. Aguarde o QR Code aparecer.
+5. Escaneie pelo app oficial do WhatsApp em Aparelhos conectados.
+6. Confirme que o status muda para `Conectado`.
+7. Clique em `Listar grupos` e copie o ID do grupo desejado.
+8. Entre na aba `Bot Legado`.
+9. Cadastre ou atualize o mapeamento do nicho para o grupo/canal.
+10. Adicione uma oferta manual ou por link.
+11. Clique em `Disparar agora`.
+12. Verifique a fila WhatsApp.
+13. Clique em `Drenar fila agora`.
+14. Use `Copiar texto` ou `Marcar enviado` quando precisar operar manualmente.

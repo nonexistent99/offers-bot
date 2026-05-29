@@ -4,6 +4,8 @@ const state = {
   creatives: [],
   accounts: [],
   queue: [],
+  whatsappQueue: [],
+  legacyGroups: [],
 };
 
 const $ = (selector) => document.querySelector(selector);
@@ -35,6 +37,13 @@ function money(value) {
   const number = Number(value);
   if (!Number.isFinite(number)) return '-';
   return number.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
+}
+
+function dateTime(value) {
+  if (!value) return '-';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return '-';
+  return date.toLocaleString('pt-BR');
 }
 
 function esc(value) {
@@ -221,6 +230,257 @@ async function loadAnalyticsDetails() {
   $('#analyticsNiches').innerHTML = (niches.niches || []).map(n => `<div class="list-item"><strong>${esc(n.niche || '-')}</strong><span>${n.products || 0} produtos · ${n.clicks || 0} cliques</span></div>`).join('') || '<div class="list-item">Sem dados.</div>';
 }
 
+function setWhatsAppStatus(status) {
+  const pill = $('#whatsappStatusPill');
+  const label = $('#whatsappStatusLabel');
+  const legacy = $('#legacyWaStatus');
+  if (!pill || !label) return;
+  pill.classList.remove('is-connected', 'is-waiting', 'is-down');
+  if (status === 'connected') {
+    pill.classList.add('is-connected');
+    label.textContent = 'Conectado';
+  } else if (status === 'qr_ready' || status === 'starting') {
+    pill.classList.add('is-waiting');
+    label.textContent = status === 'qr_ready' ? 'QR pronto' : 'Iniciando';
+  } else {
+    pill.classList.add('is-down');
+    label.textContent = status || 'Desconectado';
+  }
+  if (legacy) legacy.textContent = label.textContent;
+}
+
+async function loadWhatsAppStatus() {
+  try {
+    const data = await api('/api/whatsapp/status');
+    setWhatsAppStatus(data.status || (data.startRequested ? 'starting' : 'disconnected'));
+  } catch (error) {
+    setWhatsAppStatus('offline');
+  }
+}
+
+function reloadWhatsAppQr() {
+  const frame = $('#whatsappQrFrame');
+  if (frame) frame.src = `/api/whatsapp/qr?t=${Date.now()}`;
+}
+
+async function startWhatsApp() {
+  try {
+    const result = await api('/api/whatsapp/start', { method: 'POST', body: JSON.stringify({}) });
+    toast(result.message || 'WhatsApp iniciado.', 'ok');
+    setWhatsAppStatus(result.status || 'starting');
+    setTimeout(() => {
+      reloadWhatsAppQr();
+      loadWhatsAppStatus();
+      loadSessionInfo();
+    }, 1600);
+  } catch (error) {
+    toast(error.message, 'error');
+  }
+}
+
+async function logoutWhatsApp() {
+  if (!confirm('Limpar a sessao atual e gerar um novo QR Code? Use isso apenas para trocar o numero conectado.')) return;
+  try {
+    await api('/api/whatsapp/logout', { method: 'POST', body: JSON.stringify({}) });
+    toast('Sessao limpa. Aguarde o novo QR.', 'ok');
+    setTimeout(() => {
+      reloadWhatsAppQr();
+      loadWhatsAppStatus();
+      loadSessionInfo();
+    }, 2200);
+  } catch (error) {
+    toast(error.message, 'error');
+  }
+}
+
+async function loadSessionInfo() {
+  const box = $('#whatsappSessionInfo');
+  if (!box) return;
+  try {
+    const info = await api('/api/whatsapp/session-info');
+    box.innerHTML = `
+      <div><strong>Status:</strong> ${esc(info.status || '-')}</div>
+      <div><strong>Sessao salva:</strong> ${info.hasCreds ? 'sim' : 'nao'}</div>
+      <div><strong>Arquivos auth:</strong> ${Number(info.totalFiles || 0)}</div>
+      <div><strong>Credenciais:</strong> ${esc(dateTime(info.credsModified))}</div>
+      <div><strong>Ultima conexao:</strong> ${esc(dateTime(info.lastConnectedAt))}</div>
+      <div><strong>Tentativas:</strong> ${Number(info.reconnectAttempts || 0)}</div>
+      ${info.lastDisconnectReason ? `<div><strong>Ultima falha:</strong> ${esc(info.lastDisconnectReason)}</div>` : ''}
+      <div class="muted break-word">${esc(info.folder || '')}</div>
+    `;
+  } catch (error) {
+    box.textContent = 'Erro ao carregar sessao.';
+  }
+}
+
+async function loadLiveGroups() {
+  const list = $('#whatsappLiveGroups');
+  if (!list) return;
+  try {
+    const data = await api('/api/whatsapp/groups');
+    const groups = data.groups || [];
+    list.innerHTML = groups.map(group => `
+      <div class="list-item">
+        <strong>${esc(group.name)}</strong>
+        <span class="break-word">${esc(group.id)}</span>
+      </div>
+    `).join('') || '<div class="list-item">Nenhum grupo encontrado.</div>';
+  } catch (error) {
+    list.innerHTML = `<div class="list-item warn-text">${esc(error.message || 'Conecte o WhatsApp primeiro.')}</div>`;
+  }
+}
+
+async function loadLegacyDashboard() {
+  const sentCount = $('#legacySentCount');
+  const ramCount = $('#legacyRamCount');
+  const queueCount = $('#legacyQueueCount');
+
+  try {
+    const offers = await api('/offers');
+    if (sentCount) sentCount.textContent = offers.length || 0;
+  } catch (error) {
+    if (sentCount) sentCount.textContent = '-';
+  }
+
+  try {
+    const queues = await api('/api/queues-status');
+    if (ramCount) ramCount.textContent = queues.total || 0;
+  } catch (error) {
+    if (ramCount) ramCount.textContent = '-';
+  }
+
+  try {
+    const queue = await api('/whatsapp-queue');
+    if (queueCount) queueCount.textContent = Array.isArray(queue) ? queue.length : 0;
+  } catch (error) {
+    if (queueCount) queueCount.textContent = '-';
+  }
+}
+
+async function loadWhatsAppQueue() {
+  const grid = $('#whatsappQueueGrid');
+  if (!grid) return;
+  try {
+    const data = await api('/whatsapp-queue');
+    state.whatsappQueue = Array.isArray(data) ? data : [];
+    if ($('#legacyQueueCount')) $('#legacyQueueCount').textContent = state.whatsappQueue.length;
+    grid.innerHTML = state.whatsappQueue.map(item => `
+      <article class="message-card">
+        <div class="message-head">
+          <strong>${esc(item.product_name)}</strong>
+          ${badge(item.niche || 'sem nicho')}
+        </div>
+        <pre class="message-content" id="wa-msg-${item.id}">${esc(item.message)}</pre>
+        <div class="button-row">
+          <button class="secondary" onclick="copyWhatsAppMessage('${item.id}')">Copiar texto</button>
+          <button class="primary" onclick="markWhatsAppSent('${item.id}')">Marcar enviado</button>
+        </div>
+      </article>
+    `).join('') || '<div class="list-item">Nenhuma mensagem pendente na fila.</div>';
+
+    const chips = $('#whatsappQueueChips');
+    if (chips) {
+      const stats = await api('/whatsapp-queue/stats');
+      chips.innerHTML = (stats.byNiche || []).map(row =>
+        `<span class="chip">${esc(row.niche)}: <strong>${Number(row.count || 0)}</strong></span>`
+      ).join('') || '<span class="muted">Sem pendencias por nicho.</span>';
+    }
+  } catch (error) {
+    grid.innerHTML = `<div class="list-item bad-text">${esc(error.message)}</div>`;
+  }
+}
+
+window.copyWhatsAppMessage = async (id) => {
+  const el = $(`#wa-msg-${id}`);
+  if (!el) return;
+  await navigator.clipboard.writeText(el.innerText);
+  toast('Mensagem copiada.', 'ok');
+};
+
+window.markWhatsAppSent = async (id) => {
+  try {
+    await api('/mark-whatsapp-sent', { method: 'POST', body: JSON.stringify({ id }) });
+    toast('Mensagem marcada como enviada.', 'ok');
+    await loadWhatsAppQueue();
+    await loadLegacyDashboard();
+  } catch (error) {
+    toast(error.message, 'error');
+  }
+};
+
+async function loadLegacyGroups() {
+  const tbody = $('#legacyGroupsTable');
+  if (!tbody) return;
+  try {
+    const groups = await api('/groups');
+    state.legacyGroups = groups || [];
+    tbody.innerHTML = state.legacyGroups.map(group => `
+      <tr>
+        <td><strong>${esc(group.niche)}</strong></td>
+        <td>${esc(group.platform)}</td>
+        <td class="break-word">${esc(group.target_id)}</td>
+        <td><button class="danger" onclick="deleteLegacyGroup('${group.id}')">Remover</button></td>
+      </tr>
+    `).join('') || '<tr><td colspan="4">Nenhum grupo cadastrado.</td></tr>';
+  } catch (error) {
+    tbody.innerHTML = `<tr><td colspan="4">${esc(error.message)}</td></tr>`;
+  }
+}
+
+window.deleteLegacyGroup = async (id) => {
+  if (!confirm('Remover este mapeamento?')) return;
+  try {
+    await api(`/groups/${id}`, { method: 'DELETE' });
+    toast('Grupo removido.', 'ok');
+    await loadLegacyGroups();
+  } catch (error) {
+    toast(error.message, 'error');
+  }
+};
+
+async function loadLegacyProductsByCategory() {
+  const container = $('#legacyProductsByCategory');
+  if (!container) return;
+  const mode = $('#legacyProductsMode')?.value || 'ram';
+  try {
+    let grouped = {};
+    if (mode === 'ram') grouped = (await api('/api/queues-detailed')).queues || {};
+    if (mode === 'sent') grouped = (await api('/sent-products/by-category')).grouped || {};
+    if (mode === 'queue') grouped = (await api('/whatsapp-queue/by-category')).grouped || {};
+
+    const entries = Object.entries(grouped).filter(([, items]) => items && items.length);
+    container.innerHTML = entries.map(([category, items]) => `
+      <details class="category-block" open>
+        <summary><strong>${esc(category)}</strong><span>${items.length}</span></summary>
+        <div class="category-items">
+          ${items.map(item => `
+            <div class="list-item">
+              <strong>${esc(item.name || item.product_name)}</strong>
+              <span>${esc(item.status || item.keywordSource || item.sent_at || '')}</span>
+            </div>
+          `).join('')}
+        </div>
+      </details>
+    `).join('') || '<div class="list-item">Nada para mostrar neste modo.</div>';
+  } catch (error) {
+    container.innerHTML = `<div class="list-item bad-text">${esc(error.message)}</div>`;
+  }
+}
+
+async function runLegacyAction(path, successMessage) {
+  try {
+    const result = await api(path, { method: 'POST', body: JSON.stringify({}) });
+    toast(result.message || successMessage, 'ok');
+    setTimeout(() => {
+      loadLegacyDashboard();
+      loadWhatsAppQueue();
+      loadLegacyProductsByCategory();
+    }, 1800);
+  } catch (error) {
+    toast(error.message, 'error');
+  }
+}
+
 async function refreshAll() {
   await loadNiches();
   await loadProducts();
@@ -228,6 +488,14 @@ async function refreshAll() {
   await loadAccounts();
   await loadQueue();
   await loadSummary();
+  await Promise.allSettled([
+    loadWhatsAppStatus(),
+    loadSessionInfo(),
+    loadWhatsAppQueue(),
+    loadLegacyDashboard(),
+    loadLegacyGroups(),
+    loadLegacyProductsByCategory(),
+  ]);
 }
 
 window.generateCampaign = async (id) => {
@@ -321,6 +589,13 @@ document.addEventListener('DOMContentLoaded', () => {
       $(`#${button.dataset.tab}`).classList.add('is-active');
       if (button.dataset.tab === 'analytics') await loadAnalyticsDetails();
       if (button.dataset.tab === 'publisher') await loadQueue();
+      if (button.dataset.tab === 'whatsapp') {
+        reloadWhatsAppQr();
+        await Promise.allSettled([loadWhatsAppStatus(), loadSessionInfo(), loadLiveGroups()]);
+      }
+      if (button.dataset.tab === 'legacy') {
+        await Promise.allSettled([loadLegacyDashboard(), loadWhatsAppQueue(), loadLegacyGroups(), loadLegacyProductsByCategory()]);
+      }
     });
   });
 
@@ -330,6 +605,18 @@ document.addEventListener('DOMContentLoaded', () => {
   $('#publisherCreative').addEventListener('change', renderPublisherOptions);
   $('#refreshPublisherBtn').addEventListener('click', loadQueue);
   $('#refreshAnalyticsBtn').addEventListener('click', loadAnalyticsDetails);
+  $('#startWhatsAppBtn').addEventListener('click', startWhatsApp);
+  $('#reloadWhatsAppQrBtn').addEventListener('click', reloadWhatsAppQr);
+  $('#logoutWhatsAppBtn').addEventListener('click', logoutWhatsApp);
+  $('#refreshWhatsAppBtn').addEventListener('click', () => Promise.allSettled([loadWhatsAppStatus(), loadSessionInfo(), loadLiveGroups()]));
+  $('#refreshLiveGroupsBtn').addEventListener('click', loadLiveGroups);
+  $('#refreshLegacyBtn').addEventListener('click', () => Promise.allSettled([loadLegacyDashboard(), loadWhatsAppQueue(), loadLegacyGroups(), loadLegacyProductsByCategory()]));
+  $('#refreshWhatsAppQueueBtn').addEventListener('click', loadWhatsAppQueue);
+  $('#legacyProductsMode').addEventListener('change', loadLegacyProductsByCategory);
+  $('#dispatchNowBtn').addEventListener('click', () => runLegacyAction('/api/dispatch-now', 'Ciclo iniciado.'));
+  $('#workerNowBtn').addEventListener('click', () => runLegacyAction('/api/worker-now', 'Worker iniciado.'));
+  $('#runJobsBtn').addEventListener('click', () => runLegacyAction('/run-now', 'Processamento iniciado.'));
+  $('#aggregatorNowBtn').addEventListener('click', () => runLegacyAction('/api/aggregator-now', 'Garimpo iniciado.'));
 
   $('#importProductForm').addEventListener('submit', async (event) => {
     event.preventDefault();
@@ -434,6 +721,72 @@ document.addEventListener('DOMContentLoaded', () => {
       toast(error.message, 'error');
     }
   });
+
+  $('#legacyQuickOfferForm').addEventListener('submit', async (event) => {
+    event.preventDefault();
+    try {
+      const result = await api('/quick-offer', {
+        method: 'POST',
+        body: JSON.stringify({ link: $('#legacyQuickLink').value }),
+      });
+      event.target.reset();
+      toast(result.message || 'Oferta adicionada.', 'ok');
+      await Promise.allSettled([loadLegacyDashboard(), loadLegacyProductsByCategory()]);
+    } catch (error) {
+      toast(error.message, 'error');
+    }
+  });
+
+  $('#legacyManualOfferForm').addEventListener('submit', async (event) => {
+    event.preventDefault();
+    try {
+      await api('/offers', {
+        method: 'POST',
+        body: JSON.stringify({
+          name: $('#legacyOfferName').value,
+          oldPrice: Number($('#legacyOfferOldPrice').value || 0),
+          currentPrice: Number($('#legacyOfferCurrentPrice').value || 0),
+          discount: Number($('#legacyOfferDiscount').value || 0),
+          category: $('#legacyOfferCategory').value || undefined,
+          image: $('#legacyOfferImage').value,
+          affiliateLink: $('#legacyOfferLink').value,
+        }),
+      });
+      event.target.reset();
+      toast('Oferta adicionada nas gavetas.', 'ok');
+      await Promise.allSettled([loadLegacyDashboard(), loadLegacyProductsByCategory()]);
+    } catch (error) {
+      toast(error.message, 'error');
+    }
+  });
+
+  $('#legacyGroupForm').addEventListener('submit', async (event) => {
+    event.preventDefault();
+    try {
+      await api('/groups', {
+        method: 'POST',
+        body: JSON.stringify({
+          niche: $('#legacyGroupNiche').value,
+          platform: $('#legacyGroupPlatform').value,
+          target_id: $('#legacyGroupTarget').value,
+        }),
+      });
+      event.target.reset();
+      toast('Mapeamento salvo.', 'ok');
+      await loadLegacyGroups();
+    } catch (error) {
+      toast(error.message, 'error');
+    }
+  });
+
+  setInterval(loadWhatsAppStatus, 4000);
+  setInterval(() => {
+    const legacyTab = $('#legacy');
+    if (legacyTab && legacyTab.classList.contains('is-active')) {
+      loadLegacyDashboard();
+      loadWhatsAppQueue();
+    }
+  }, 15000);
 
   refreshAll().catch(error => toast(error.message, 'error'));
 });

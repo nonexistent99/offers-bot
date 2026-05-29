@@ -26,6 +26,7 @@ const ENABLE_LEGACY_SCRAPER = process.env.ENABLE_LEGACY_SCRAPER === 'true';
 let aggregatorRunning = false;
 let dispatcherRunning = false;
 let workerRunning = false;
+let whatsappBootRequested = false;
 
 async function safeRunAggregator() {
   if (!ENABLE_LEGACY_SCRAPER) {
@@ -57,12 +58,36 @@ async function safeRunWorker() {
 
 // ─── Rotas da API do WhatsApp ─────────────────────────────────────────────────
 
+function safeStartWhatsApp() {
+  const status = getStatus();
+  if (status === 'connected' || status === 'qr_ready') {
+    return { started: false, status, message: 'WhatsApp ja esta iniciado.' };
+  }
+
+  if (whatsappBootRequested) {
+    return { started: false, status: 'starting', message: 'Inicializacao do WhatsApp ja solicitada.' };
+  }
+
+  whatsappBootRequested = true;
+  startWhatsApp().catch(err => {
+    whatsappBootRequested = false;
+    console.error('[WhatsApp] Erro ao iniciar pelo painel:', err.message);
+  });
+
+  return { started: true, status: 'starting', message: 'Inicializacao do WhatsApp solicitada. Aguarde o QR Code.' };
+}
+
 app.get('/api/whatsapp/status', (req, res) => {
   res.json({
     status: getStatus(),
     connectedAt: getLastConnectedAt(),
     hasQr: !!getQrCode(),
+    startRequested: whatsappBootRequested || ENABLE_LEGACY_WHATSAPP,
   });
+});
+
+app.post('/api/whatsapp/start', (req, res) => {
+  res.json(safeStartWhatsApp());
 });
 
 app.get('/api/whatsapp/qr.json', (req, res) => {
@@ -205,8 +230,12 @@ app.listen(PORT, () => {
       // 2) Inicia WhatsApp (gera QR ou usa sessão salva)
       console.log('[WhatsApp] Fluxo legado controlado por ENABLE_LEGACY_WHATSAPP.');
       if (ENABLE_LEGACY_WHATSAPP) {
+        whatsappBootRequested = true;
         console.log('[WhatsApp] Iniciando conexao legado. Acesse http://localhost:' + PORT + '/api/whatsapp/qr para escanear o QR Code.');
-        startWhatsApp().catch(err => console.error('[WhatsApp] Erro ao iniciar:', err.message));
+        startWhatsApp().catch(err => {
+          whatsappBootRequested = false;
+          console.error('[WhatsApp] Erro ao iniciar:', err.message);
+        });
       } else {
         console.log('[WhatsApp] Legado desativado por padrao. Defina ENABLE_LEGACY_WHATSAPP=true para usar o fluxo antigo.');
       }
